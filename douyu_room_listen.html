@@ -1,0 +1,508 @@
+<!--
+    # 转载与使用或修改需保留以下信息:
+    制作人:
+        qq: 32686647
+        weixin: gamefunc
+        https://www.gamefunc.top:9029
+        gpl 3.0
+
+    之前直播不想装弹幕软件但又想收到礼品或者弹幕时听到提示而制作;
+    可选是收到弹幕后 文字转语音 或者 自制的B一声;
+
+    公版, 需要自己修改逻辑, 与自行搭建后台爬斗鱼弹幕:
+    # 如果想听 文字转语音可以查看函数:
+        play_text_speech(l[2] + l[3])
+    # 如果只想听到B1声可以查看函数:
+        AUDIO_PLAYER.play_custom_noise()
+
+    测试页: https://www.gamefunc.top:9029/douyu_room_listen/8033195
+-->
+
+<!DOCTYPE html>
+<html>
+	<head>
+        <meta charset="utf-8"/>  
+		<title>斗鱼房间监听</title>
+    </head>
+
+<body onresize="WIDGETS_CTL.setup_widgets()">
+    <!-- DIV MAIN_WIN start  -->
+    <div id="MAIN_WIN">
+        <div id="CHAT_MSG_SHOW_WIN"></div>
+
+        <h1 id="THIS_PAGE_DESCRIPT_H1">websocket 未链接</div>
+
+        <button id = "AUDIO_ON_OFF_BUTTON" 
+            onclick="audio_on_off()">礼品提示音</button>
+
+        <div id="GIFT_SHOW_WIN"></div>
+
+        <div id="PEOPLE_INTO_SHOW_WIN"></div>
+    </div><!-- DIV MAIN_WIN end -->
+
+
+    <!-- 全局变量 start -->
+    <script>
+        // 获取 ADC 数据的地址; 
+        var WS_DATA_PATH = "wss://home.gamefunc.top/douyu_room_listen_ws";
+        var WS_DATA_CONN = null;
+        var WS_IS_CONNECTING = false;
+        // ADC_WS_CONN 发生错误或者关闭时保存一下EVENT, 之后控制台可以看下方法;
+        var WS_ERROR_EVENT = null;
+
+        // 创建 外围DIV 后 默认的字体大小:
+        var SRC_FONT_SIZE = 0;
+
+        // 是否允许播放声音:
+        var ALLOW_PLAY_AUDIO = false;
+        var AUDIO_PLAYER = null;
+        var SPEECH_PLAYER = null;
+
+        // 不显示哪些关键词的礼品:
+        NOT_SHOW_GIFTS_WILDCARDS = [
+            "荧光棒", "小画家", "弱鸡", 
+            "呵呵", "稳", "赞"
+        ];
+
+    </script>
+    <!-- 全局变量 end -->
+
+
+
+    <!-- 界面设置函数 start -->
+    <script>
+        function get_widget_font_size(widget_obj){
+            /* 获取某对象 当前的 字典大小, 单位px, 返回 int; */
+            let font_size = Number(window.getComputedStyle(
+                widget_obj).fontSize.slice(0, -2));
+            return font_size;
+        }// get_widget_font_size()
+
+        class Widget_Setup_Methods{
+            constructor(outside_widgets = []){
+                this.outside_widgets = outside_widgets;
+            }// 构造函数;
+
+            setup_widgets(){
+                /* 设置 所有窗口的 大小 与位置 */
+                this.__setup_outside_win_widgets();
+            }// setup_widgets()
+
+
+            __setup_outside_win_widgets(){
+                let win_params = this.__get_outside_win_size_params();
+                let display_w = win_params["display_w"];
+                let display_h = win_params["display_h"];
+                let widget_w = win_params["widget_w"];
+                let widget_h = win_params["widget_h"];
+                let margin_w = win_params["margin_w"];
+                let margin_h = win_params["margin_h"];
+
+                let h1_bt1_w = win_params["h1_bt1_w"];
+                let h1_w = Math.floor(h1_bt1_w * 0.59);
+                let bt1_w = Math.floor(h1_bt1_w * 0.38);
+                let h1_bt_margin = Math.floor(h1_bt1_w * 0.03);
+                let h1_bt1_h = Math.floor(display_h / 100 * 6);
+                
+                // 设置大小 与 位置:
+                let x = margin_w;
+                let y = Math.floor(margin_h / 3);
+                // 第 0 个是 descript h1;
+                let i = 0;
+                for(let w of this.outside_widgets){
+                    // ws链接成功与否的h1 与 音效开关按钮 文字居中, 其他左起:
+                    w.style.textAlign = (i > 1) ? "left" : "center";
+                    // 设置边框 大小 样式 颜色:
+                    w.style.border = "1px solid white";
+
+                    // margin: 上右下左:
+                    w.style.margin = `0px`;
+
+                    // 设置 大小 与 位置:
+                    w.style.position = "absolute";
+                    w.style.left = `${x}px`;
+                    w.style.top = `${y}px`;
+                    if(i == 0){// ws链接成功与否的h1:
+                        w.style.width = `${h1_w}px`;
+                        w.style.height = `${h1_bt1_h}px`;
+                        x = x + h1_w + h1_bt_margin;
+                        w.style.backgroundColor = WS_IS_CONNECTING ? "green"
+                            : "red";
+                        i++;
+                        continue;
+                    }else if(i == 1){// 音效开关按钮:
+                        w.style.width = `${bt1_w}px`;
+                        w.style.height = `${h1_bt1_h}px`;
+                        // 换行:
+                        y = y + h1_bt1_h + Math.ceil(margin_h / 2);
+                        x = margin_w;
+                        w.style.backgroundColor = ALLOW_PLAY_AUDIO ? "green"
+                            : "red";
+                        i++;
+                        let font_size = get_widget_font_size(
+                            THIS_PAGE_DESCRIPT_H1);
+                        w.style.fontSize = `${font_size}px`;
+                        w.style.padding = '0px';
+                        continue;
+                    }else{// chatmsg, 礼品, 进场 的文本框:
+                        w.style.width = `${widget_w}px`;
+                        w.style.height = `${widget_h}px`;
+                    }// if else 指定对应的 widget 长宽;
+
+                    // 显示的内容超过这个div后怎处理, "auto"是div滚动,
+                    // 不设置的话, 会越界超过 这个div;
+                    w.style.overflow = "auto";
+
+                    // 设置字体大小:
+                    if(SRC_FONT_SIZE == 0){
+                        SRC_FONT_SIZE = Number(window.getComputedStyle(
+                            w).fontSize.slice(0, -2));
+                    }// 只当 SRC_FONT_SIZE 未设置时设置;
+                    let new_font_size = Math.ceil(SRC_FONT_SIZE * 1.1);
+                    w.style.fontSize = `${new_font_size}px`;
+
+                    // x 移动到 下一个 widget 开始位置:
+                    x = x + widget_w + margin_w;
+                    
+                    // 如果 下一个 widget 摆放越界, 就换行:
+                    if((x + widget_w) >= display_w){
+                        x = margin_w;
+                        y = y + widget_h + margin_h;
+                    }
+                }// for w in 最外围的几个widgets;
+            }// __setup_outside_win_widgets()
+
+
+            __get_outside_win_size_params(){ // -> dict:
+                // 获取 浏览器 可显示的宽与高(不包括滚动):
+                let display_w = document.documentElement.clientWidth;
+                let display_h = document.documentElement.clientHeight;
+
+                // >= 1.58的话横向放3个; >= 1.3的话横向放2个; 否则 1个;
+                let w_h_ratio = display_w / display_h;
+                let widget_height = display_h - Math.ceil(
+                    display_h / 100 * 10);
+
+                let widget_width = 0;
+                let margin_w = 0;
+                let margin_h = Math.ceil(display_h / 100 * 6);
+                let h1_bt1_w = 0;
+
+                if(w_h_ratio >= 1.65){
+                    widget_width = Math.floor(display_w / 100 * 30);
+                    margin_w = Math.floor(display_w / 100 * 10 / 4);
+                    h1_bt1_w = widget_width * 3 + margin_w * 2;
+                }else if(w_h_ratio >= 1.2){
+                    widget_width = Math.floor(display_w / 100 * 45);
+                    margin_w = Math.floor(display_w / 100 * 10 / 3);
+                    h1_bt1_w = widget_width * 2 + margin_w * 1;
+                }else{
+                    widget_width = Math.floor(display_w / 100 * 90);
+                    margin_w = Math.floor(display_w / 100 * 10 / 2);
+                    h1_bt1_w = widget_width * 1;
+                }// if else 根据 可显宽度 获取 该 widget 宽度;
+
+                return {
+                    "display_w": display_w,
+                    "display_h": display_h,
+                    "widget_w": widget_width,
+                    "widget_h": widget_height,
+                    "margin_w": margin_w,
+                    "margin_h": margin_h,
+                    "h1_bt1_w": h1_bt1_w
+                };
+            }// __get_outside_win_size_params()
+        }// class Widget_Setup_Methods;
+
+        
+
+    </script>
+    <!-- 界面设置函数 end -->
+    
+
+
+    <!-- 界面参数相关 start -->
+    <script>
+        // 设置整个页面默认背景颜色:
+        document.body.style.background = "black";
+
+        // 获取所有 WIN 对象:
+        var MAIN_WIN = document.getElementById("MAIN_WIN");
+        var THIS_PAGE_DESCRIPT_H1 = document.getElementById(
+            "THIS_PAGE_DESCRIPT_H1");
+        var CHAT_MSG_SHOW_WIN = document.getElementById(
+            "CHAT_MSG_SHOW_WIN");
+        var AUDIO_ON_OFF_BUTTON = document.getElementById(
+            "AUDIO_ON_OFF_BUTTON");
+        var GIFT_SHOW_WIN = document.getElementById(
+            "GIFT_SHOW_WIN");
+        var PEOPLE_INTO_SHOW_WIN = document.getElementById(
+            "PEOPLE_INTO_SHOW_WIN");
+
+        var WIDGETS_CTL = new Widget_Setup_Methods(
+            [THIS_PAGE_DESCRIPT_H1,
+            AUDIO_ON_OFF_BUTTON,
+            CHAT_MSG_SHOW_WIN, 
+            GIFT_SHOW_WIN, 
+            PEOPLE_INTO_SHOW_WIN]
+        );
+        WIDGETS_CTL.setup_widgets();
+
+    </script>
+    <!-- 界面参数相关 end -->
+
+    <!-- 通用函数 start -->
+    <script>
+        // asyncio sleep 底函数;
+        function asyncio_sleep_ms(ms){
+            return new Promise(
+                resolve => setTimeout(resolve, ms));
+        }//asyncio_sleep_ms();
+
+    
+        class json {
+            // 构造函数;
+            constructor(){}
+
+            static loads(s = "{}"){
+                return JSON.parse(s);
+            }// loads
+
+            static dumps(d = {}){
+                return JSON.stringify(d);
+            }//dumps
+        }// class json;
+
+
+        class Audio_Play{
+            constructor(){
+                // 创建音频上下文后获取音频相关api:
+                const AudioContext = window.AudioContext 
+                    || window.webkitAudioContext;
+                this.audio_ctx = new AudioContext();
+                this.__now_playing = false;
+            }// 构建函数;
+
+            async play_custom_noise(play_time_ms = 100,
+                    freq = 100){
+                if(ALLOW_PLAY_AUDIO == false){ return 0; }
+                /* 播放 使用 振荡器 制作的噪声*/
+                if(this.__now_playing == false){
+                    // 标记正在播放:
+                    this.__now_playing = true;
+                    // 创建振荡器:
+                    let oscillator = this.audio_ctx.createOscillator();
+                    // 振荡器 连接 音频上下文:
+                    oscillator.connect(this.audio_ctx.destination);
+                    // 设置振荡器频率:
+                    oscillator.frequency.value = freq;
+                    // 开始播放:
+                    oscillator.start(0);
+                    // 暂停一段时间:
+                    await asyncio_sleep_ms(play_time_ms);
+                    // 关闭:
+                    oscillator.disconnect();
+                    // 状态设置为false允许下次:
+                    this.__now_playing = false;
+                }// if 不是正在播放:
+            }// play_noise()
+        }// class Sound_Play;
+
+
+        function play_text_speech(txt = "吃饭睡觉"){
+            /* 把文字 转 语音 并播放 */
+            if((ALLOW_PLAY_AUDIO == false) 
+                    || (SPEECH_PLAYER == null)){ 
+                return 0; 
+            }
+            // 创建要播放的 msg 对象:
+            msg = new SpeechSynthesisUtterance()
+            // 设置 要播放的 文字内容:
+            msg.text = txt;
+            // 设置 要播放的 txt 的 语言:
+            msg.lang = "zh-CN";
+            // 设置播放音量大小:
+            msg.volume = 1;
+            // 设置 语速:
+            msg.rate = 1;
+            // 设置 音高:
+            msg.pitch = 1;
+            // 播放:
+            SPEECH_PLAYER.speak(msg);
+        }// play_text_speech()
+
+
+
+
+        function audio_on_off(){
+            /* 开关 礼品 声音 提示的 按钮 的触发函数: */
+            if(ALLOW_PLAY_AUDIO == false){
+                ALLOW_PLAY_AUDIO = true;
+                AUDIO_ON_OFF_BUTTON.style.backgroundColor = "green";
+                if(AUDIO_PLAYER == null){
+                    AUDIO_PLAYER = new Audio_Play();
+                }// if AUDIO_PLAYER 还没创建就创建;
+                if(SPEECH_PLAYER == null){
+                    SPEECH_PLAYER = window.speechSynthesis;
+                }// 如果没有 SPEECH_PLAYER就创建;
+            }else{
+                ALLOW_PLAY_AUDIO = false;
+                AUDIO_ON_OFF_BUTTON.style.backgroundColor = "red";
+            }// if else 反向设置按钮颜色与变量;
+        }// audio_on_off()
+
+
+        function *fibonacci_gen(){
+            /* yield fib:
+                外面使用方法:
+                let fib_it = fibonacci_gen();
+                // 返回的是int;
+                let x = fib_it.next().value; 
+                x = fib_it.next().value;
+                ...
+                外面每调用一次next能一次获取: (1, 1, 2, 3, 5, 8, 13...) 
+                
+                // 方法2:
+                    let fib_gen = fibonacci_gen();
+                    for(const n of fib_gen){
+                        console.log(n);
+                        if(n > 100){ break; }
+                    }// for n in fib_gen:
+                */
+            let a = 0; let b = 1;
+            while(true){
+                yield b;
+                let tmp = a;
+                a = b;
+                b += tmp;
+            }// while(true)
+        }// fibonacci_gen()
+
+
+        function judge_strs_is_match(
+                l = ["荧光棒", "小画家"], 
+                sentence = "你好你是小画家"){
+            /* 判断 s 里是否包含 l 里的字样; 
+                有包含返回 true; 没有就 false; */
+            for(let s of l){
+                if(sentence.indexOf(s) != -1){ return true; }
+            }
+            return false;
+        }// judge_strs_is_match()
+    </script>
+    <!-- 通用函数 end -->
+
+
+    <!-- ws控制 start -->
+    <script>
+        // 连接 WS服务器: 
+        WS_DATA_CONN = new WebSocket(WS_DATA_PATH);
+
+        // ADC_WS 建立连接后 触发该函数;
+        WS_DATA_CONN.onopen = function(event){
+            THIS_PAGE_DESCRIPT_H1.style.backgroundColor = "green";
+            THIS_PAGE_DESCRIPT_H1.innerText = `websocket 链接成功`;
+            WS_IS_CONNECTING = true;
+            let d = {
+                // 请求类型:
+                "req_type": "get_room_info",
+                // 请求房间号:
+                "room_id": 1717317173171731717317173,
+                // 请求 最后 100 条 chatmsg:
+                "chatmsg": 200,
+                // 请求 最后 100 条 礼品信息:
+                "dgb": 500,
+                // 请求 最后 50条 进房间信息:
+                "uenter": 20
+            };
+            WS_DATA_CONN.send(json.dumps(d));
+        }// onopen()
+
+
+        // ADC_WS 发生错误后 触发该函数;
+        WS_DATA_CONN.onerror = function(event){
+            THIS_PAGE_DESCRIPT_H1.style.backgroundColor = "red";
+            THIS_PAGE_DESCRIPT_H1.innerText = `websocket onerror`;
+            WS_IS_CONNECTING = false;
+            WS_ERROR_EVENT = event;
+            console.log(event);
+        }// onerror()
+
+
+        // ADC_WS 关闭后 触发该函数;
+        WS_DATA_CONN.onclose = function(event){
+            THIS_PAGE_DESCRIPT_H1.style.backgroundColor = "red";
+            THIS_PAGE_DESCRIPT_H1.innerText = `websocket onclose`;
+            WS_IS_CONNECTING = false;
+            WS_ERROR_EVENT = event;
+            console.log(event);
+        }// onclose()
+
+
+        WS_DATA_CONN.onmessage = function(event){
+            // 收到json: 先加载:
+            // console.log(event.data);
+            // ['dgb', 'lv23: 牌名: 9', '人名', 
+            //  '送出: 500 个 粉丝荧光棒', 
+            //  '2022-12-28 02:32:14']
+            let l = json.loads(event.data);
+            if(l[0] == "ping"){ return 0; }
+            
+            // 获取当前字体大小:
+            let font_size = get_widget_font_size(CHAT_MSG_SHOW_WIN);
+
+            // 如果要防止注入就要加security_replace;
+            // `<font color="green">${l[4].slice(-8)}: <font> `;
+            let txt = `<font color="green" title="${l[4]}">[${l[1]}]</font> `;
+            txt += `<font color="yellow">${l[2]}: </font>`;
+            txt += `<font color="white">${l[3]}</font>`;
+            txt += "<br>";
+            
+            // 关系: scrollTop + clientHeight = scrollHeight;
+            if(l[0] == "chatmsg"){// 聊天消息:
+                CHAT_MSG_SHOW_WIN.innerHTML += txt;
+                if((CHAT_MSG_SHOW_WIN.scrollTop 
+                    + CHAT_MSG_SHOW_WIN.clientHeight
+                    + font_size * 28)
+                        > CHAT_MSG_SHOW_WIN.scrollHeight){
+                    CHAT_MSG_SHOW_WIN.scrollTop = 
+                        CHAT_MSG_SHOW_WIN.scrollHeight;
+                }// 判断是否需要滚动到最下面;
+            }else if(l[0] == "dgb"){// 礼品:
+                if(!judge_strs_is_match(
+                        NOT_SHOW_GIFTS_WILDCARDS, 
+                        l[l.length - 2])){
+                    GIFT_SHOW_WIN.innerHTML += txt;
+                    GIFT_SHOW_WIN.scrollTop = 
+                        GIFT_SHOW_WIN.scrollHeight;
+                    // 文字 转 语音:
+                    play_text_speech(l[2] + l[3]);
+                }// 找不到荧光棒再加入;
+
+                if(AUDIO_PLAYER != null){
+                    // if(l[l.length - 2].indexOf("荧光棒") == -1){
+                        AUDIO_PLAYER.play_custom_noise();
+                    // }// -1就是没有找到荧光棒, 再报警;
+                }// 判断 AUDIO_PLAYER 是否已实例化;
+                
+            }else if(l[0] == "uenter"){// 进场:
+                PEOPLE_INTO_SHOW_WIN.innerHTML += txt;
+                PEOPLE_INTO_SHOW_WIN.scrollTop = 
+                PEOPLE_INTO_SHOW_WIN.scrollHeight;
+            }else{// 其他未定义:
+
+            }
+
+        }// onmessage()
+
+
+
+    </script>
+    <!-- ws控制 end -->
+
+
+
+    
+
+</body><!-- body -->
+</html><!-- html -->
